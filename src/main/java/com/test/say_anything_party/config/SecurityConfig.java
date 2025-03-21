@@ -13,15 +13,17 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-                .csrf(csrf -> csrf.disable())  // ✅ CSRF 보호 비활성화 (API 서버인 경우)
+                .csrf(csrf -> csrf.disable())  // CSRF 보호 비활성화 (테스트용)
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/users/auth", "/users", "/posts/**").permitAll() // 인증 없이 접근 허용할 경로
-                        .anyRequest().authenticated() // 그 외 요청은 인증 필요
-                );
+                        .anyRequest().permitAll()  // 모든 요청 허용 (로그인 없이 사용 가능)
+                )
+                .formLogin(form -> form.disable()) // 기본 로그인 폼 비활성화
+                .httpBasic(httpBasic -> httpBasic.disable()); // HTTP 기본 인증 비활성화
 
         return http.build();
     }
 
+    // 🔥 여기 추가: PasswordEncoder를 Bean으로 등록해야 함
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();

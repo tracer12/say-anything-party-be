@@ -7,12 +7,17 @@ import com.test.say_anything_party.dto.CommentResponse;
 import com.test.say_anything_party.model.Post;
 import com.test.say_anything_party.model.Comment;
 import com.test.say_anything_party.model.User;
+import com.test.say_anything_party.model.Like;
 import com.test.say_anything_party.repository.PostRepository;
 import com.test.say_anything_party.repository.CommentRepository;
 import com.test.say_anything_party.repository.UserRepository;
+import com.test.say_anything_party.repository.LikeRepository;
 import com.test.say_anything_party.util.JwtUtil;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.transaction.annotation.Transactional;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 
 import java.io.File;
 import java.io.IOException;
@@ -25,12 +30,16 @@ public class PostService {
     private final PostRepository postRepository;
     private final CommentRepository commentRepository;
     private final UserRepository userRepository;
+    private final LikeRepository likeRepository;
+    @PersistenceContext
+    private EntityManager entityManager;
     private final JwtUtil jwtUtil;
 
-    public PostService(PostRepository postRepository, CommentRepository commentRepository, UserRepository userRepository, JwtUtil jwtUtil) {
+    public PostService(PostRepository postRepository, CommentRepository commentRepository, UserRepository userRepository, LikeRepository likeRepository, JwtUtil jwtUtil) {
         this.postRepository = postRepository;
         this.commentRepository = commentRepository;
         this.userRepository = userRepository;
+        this.likeRepository = likeRepository;
         this.jwtUtil = jwtUtil;
     }
 
@@ -64,7 +73,7 @@ public class PostService {
         return new PostResponse(postRepository.save(post));
     }
 
-    // 게시글 상세 정보 가져오기(댓글이랑 같이)
+    @Transactional
     public Map<String, Object> getPostWithComments(Long pid) {
         Optional<Post> postOptional = postRepository.findById(pid);
 
@@ -72,14 +81,26 @@ public class PostService {
             return Collections.emptyMap();
         }
 
-        Post post = postOptional.get();
-        
+        // ✅ 조회수 증가
+        postRepository.incrementViews(pid);
+
+        // ✅ DB에 즉시 반영
+        entityManager.flush();
+
+        // ✅ JPA 캐시 무효화 (1차 캐시 제거)
+        entityManager.clear();
+
+        // ✅ 조회수 반영된 상태로 다시 조회
+        Post post = postRepository.findPostById(pid)
+                .orElseThrow(() -> new RuntimeException("게시글을 찾을 수 없습니다."));
+
         List<CommentResponse> comments = commentRepository.findByPost(post)
                 .stream()
-                .map(CommentResponse::new) // 댓글 작성자의 프로필 이미지도 포함
+                .map(CommentResponse::new)
                 .collect(Collectors.toList());
 
         Map<String, Object> response = new HashMap<>();
+        System.out.println("📌 조회수 증가 후 views: " + post.getViews()); // ✅ 로그 확인
         response.put("post", new PostResponse(post));
         response.put("comments", comments);
 
@@ -87,15 +108,43 @@ public class PostService {
     }
 
 
-    // 게시글 삭제
-    public void deletePost(Long pid) {
+    @Transactional
+    public void deletePost(Long pid, String token) {
+        String email = jwtUtil.getEmailFromToken(token);
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("사용자를 찾을 수 없습니다."));
+
         Optional<Post> postOptional = postRepository.findById(pid);
-        if (postOptional.isPresent()) {
-            Post post = postOptional.get();
+
+        if (postOptional.isEmpty()) {
+            throw new RuntimeException("게시글을 찾을 수 없습니다.");
+        }
+
+        Post post = postOptional.get();
+
+        if (!post.getUser().getUid().equals(user.getUid())) {
+            throw new RuntimeException("해당 게시글을 삭제할 권한이 없습니다.");
+        }
+
+        try {
+            // ✅ 해당 게시글에 좋아요가 존재하면 삭제
+            if (likeRepository.existsByPost(post)) {
+                likeRepository.deleteByPost(post);
+            }
+
+            // ✅ 댓글 삭제
             commentRepository.deleteByPost(post);
+
+            // ✅ 게시글 삭제
             postRepository.delete(post);
+
+            System.out.println("✅ 게시글 삭제 성공: pid = " + pid);
+        } catch (Exception e) {
+            System.out.println("❌ 게시글 삭제 중 오류 발생: " + e.getMessage());
+            throw new RuntimeException("게시글 삭제 중 오류 발생");
         }
     }
+
 
     // 게시글 수정
     public PostResponse updatePost(Long pid, String token, String title, String content, MultipartFile postImage) throws IOException {
@@ -118,9 +167,10 @@ public class PostService {
         // 이미지 변경 데이터
         if (postImage != null && !postImage.isEmpty()) {
             String newImageUrl = saveImage(postImage);
+            System.out.println("why image : " + newImageUrl); // ㅣㅆ발 여기서 왜 갑자기 ?
             post.setPostImage(newImageUrl);
         } else {
-            System.out.println("📌 이미지 변경 없음, 기존 이미지 유지: " + post.getPostImage());
+            System.out.println("no image" + post.getPostImage());
         }
 
         return new PostResponse(postRepository.save(post));
@@ -210,5 +260,25 @@ public class PostService {
             e.printStackTrace();
             return null;
         }
+    }
+
+    public void likePost(Long pid, String token) {
+        String email = jwtUtil.getEmailFromToken(token);
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("사용자를 찾을 수 없습니다."));
+
+        Post post = postRepository.findById(pid)
+                .orElseThrow(() -> new RuntimeException("게시글을 찾을 수 없습니다."));
+
+        // ✅ 이미 좋아요 했는지 확인
+        if (likeRepository.existsByUserAndPost(user, post)) {
+            throw new RuntimeException("이미 좋아요를 눌렀습니다.");
+        }
+
+        Like like = new Like(user, post);
+        likeRepository.save(like);
+
+        post.setLikes(post.getLikes() + 1);
+        postRepository.save(post);
     }
 }

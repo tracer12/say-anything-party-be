@@ -22,4 +22,12 @@ public interface PostRepository extends JpaRepository<Post, Long> {
     @Transactional
     @Query("DELETE FROM Post p WHERE p.user = :user")
     void deleteByUser(@Param("user") User user);
+
+    @Modifying
+    @Transactional
+    @Query("UPDATE Post p SET p.views = p.views + 1 WHERE p.pid = :pid")
+    void incrementViews(@Param("pid") Long pid);
+
+    @Query("SELECT p FROM Post p WHERE p.pid = :pid")
+    Optional<Post> findPostById(@Param("pid") Long pid);
 }

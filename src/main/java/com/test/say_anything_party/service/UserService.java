@@ -6,6 +6,7 @@ import com.test.say_anything_party.model.User;
 import com.test.say_anything_party.repository.UserRepository;
 import com.test.say_anything_party.repository.CommentRepository;
 import com.test.say_anything_party.repository.PostRepository;
+import com.test.say_anything_party.repository.LikeRepository;
 import com.test.say_anything_party.util.JwtUtil;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -24,7 +25,7 @@ public class UserService {
     private final UserRepository userRepository;
     private final PostRepository postRepository;
     private final CommentRepository commentRepository;
-
+    private final LikeRepository likeRepository;
     @PersistenceContext
     private EntityManager entityManager;
     private final PasswordEncoder passwordEncoder;
@@ -33,11 +34,13 @@ public class UserService {
     public UserService(UserRepository userRepository,
                        PostRepository postRepository,
                        CommentRepository commentRepository,
+                       LikeRepository likeRepository,
                        PasswordEncoder passwordEncoder,
                        JwtUtil jwtUtil) {
         this.userRepository = userRepository;
         this.postRepository = postRepository;
         this.commentRepository = commentRepository;
+        this.likeRepository = likeRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtUtil = jwtUtil;
     }
@@ -97,7 +100,7 @@ public class UserService {
         userRepository.save(user);
     }
 
-    @Transactional  //회원탈퇴, 트랜잭션으로
+    @Transactional  //회원탈퇴, 트랜잭션 적용
     public void deleteUser(String token) {
         String email = jwtUtil.getEmailFromToken(token);
 
@@ -107,30 +110,37 @@ public class UserService {
                     return new RuntimeException("사용자를 찾을 수 없습니다.");
                 });
 
-        // 1. 탈퇴할 사용자가 작성한 모든 댓글을 삭제한다
+        // ✅ 1. 탈퇴할 사용자가 눌렀던 모든 좋아요 삭제
+        likeRepository.deleteByUser(user);
+        entityManager.flush();  // ✅ 강제 삭제 수행
+
+        // ✅ 2. 탈퇴할 사용자가 작성한 모든 댓글을 삭제한다
         commentRepository.deleteByUser(user);
         entityManager.flush();  // ✅ 강제 삭제 수행
 
-        // 2. 사용자가 작성한 모든 게시글을 찾는다
+        // ✅ 3. 사용자가 작성한 모든 게시글을 찾는다
         List<Post> userPosts = postRepository.findByUser(user);
 
-        if (userPosts.isEmpty()) {
-        } else {
-            // 사용자가 작성한 모든 게시글의 댓글을 먼저 지우고
+        if (!userPosts.isEmpty()) {
+            // ✅ 4. 사용자가 작성한 모든 게시글의 좋아요 삭제
             userPosts.forEach(post -> {
+                likeRepository.deleteByPost(post);
                 commentRepository.deleteByPost(post);
                 entityManager.flush();  // ✅ 강제 삭제 수행
             });
 
-            // 게시글을 삭제한다.
+            // ✅ 5. 게시글을 삭제한다.
             postRepository.deleteAll(userPosts);
             entityManager.flush();  // ✅ 강제 삭제 수행
         }
 
-        // 그 다음 사용자를 삭제한다
+        // ✅ 6. 최종적으로 사용자 계정 삭제
         userRepository.delete(user);
         entityManager.flush();  // ✅ 강제 삭제 수행
+
+        System.out.println("✅ 회원 탈퇴 완료: " + email);
     }
+
 
     // 이미지 저장
     private String saveImage(MultipartFile imageFile) {

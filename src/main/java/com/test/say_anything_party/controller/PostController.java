@@ -61,10 +61,25 @@ public class PostController {
 
     // 게시글 삭제
     @DeleteMapping("/{pid}")
-    public ResponseEntity<Void> deletePost(@PathVariable Long pid) {
-        postService.deletePost(pid);
-        return ResponseEntity.noContent().build();
+    public ResponseEntity<Void> deletePost(
+            @PathVariable Long pid,
+            @RequestHeader("Authorization") String authorization) {
+
+        String token = authorization.substring(7); // ✅ "Bearer " 제거
+
+        try {
+            postService.deletePost(pid, token);
+            return ResponseEntity.noContent().build();
+        } catch (RuntimeException e) {
+            if (e.getMessage().equals("해당 게시글을 삭제할 권한이 없습니다.")) {
+                return ResponseEntity.status(403).build(); // 403 Forbidden 반환
+            }
+            return ResponseEntity.notFound().build(); // 404 Not Found 반환
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().build(); // 400 Bad Request 반환
+        }
     }
+
 
     // 게시글 수정
     @PatchMapping("/{pid}")
@@ -76,7 +91,7 @@ public class PostController {
             @RequestPart(value = "postImage", required = false) MultipartFile postImage
     ) {
         String token = authorization.substring(7);
-
+        System.out.println("fucking image : " + postImage); // ㅣㅆ발 여기서 왜 갑자기 ?
         try {
             PostResponse updatedPost = postService.updatePost(pid, token, title, content, postImage);
             return ResponseEntity.ok(updatedPost);
@@ -152,6 +167,21 @@ public class PostController {
             return ResponseEntity.notFound().build();
         } catch (Exception e) {
             return ResponseEntity.badRequest().build();
+        }
+    }
+
+    @PostMapping("/{pid}/like")
+    public ResponseEntity<?> likePost(
+            @PathVariable Long pid,
+            @RequestHeader("Authorization") String authorization
+    ) {
+        String token = authorization.substring(7);
+
+        try {
+            postService.likePost(pid, token);
+            return ResponseEntity.ok().body("좋아요가 추가되었습니다.");
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
         }
     }
 }
